@@ -19,7 +19,7 @@ import SuccessOverlay from './components/SuccessOverlay';
 import SmartTaskInput from './components/SmartTaskInput';
 import LevelUpOverlay from './components/LevelUpOverlay';
 import AuthModal from './components/AuthModal';
-import { Settings, Plus, X as CloseIcon, Terminal, GraduationCap, Sun, Monitor, LayoutDashboard, Play, User as UserIcon, LogOut } from 'lucide-react';
+import { Settings, Plus, X as CloseIcon, Terminal, GraduationCap, Sun, Monitor, LayoutDashboard, Play, User as UserIcon, LogOut, Cloud, RefreshCw } from 'lucide-react';
 import { auth, db } from './firebase'; // Import Firebase
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
@@ -34,10 +34,11 @@ const App: React.FC = () => {
   // New State for UI Updates
   const [levelUpLevel, setLevelUpLevel] = useState<number | null>(null); // Stores the specific level reached
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false); // Visual loading state for cloud ops
 
   // --- Persistence & Morning Reset ---
   
-  // 1. Load from LocalStorage first (for offline speed)
+  // 1. Load from LocalStorage first (for instant offline load)
   useEffect(() => {
     const saved = localStorage.getItem('devquest_state');
     if (saved) {
@@ -54,10 +55,11 @@ const App: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 2. Firebase Auth Listener
+  // 2. Firebase Auth Listener & Cloud Sync
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       if (currentUser) {
+        setIsSyncing(true);
         // User logged in
         const userProfile: User = {
           uid: currentUser.uid,
@@ -65,14 +67,43 @@ const App: React.FC = () => {
           email: currentUser.email || '',
           photoURL: currentUser.photoURL || undefined
         };
-        
-        // Update state with user info
-        setGameState(prev => ({ ...prev, user: userProfile }));
-        showNotification(`Synced as ${userProfile.displayName}`, 'success');
 
-        // Optional: Load data from Firestore here in the future
-        // const docRef = doc(db, "users", currentUser.uid);
-        // ...
+        try {
+            // Check for Cloud Save
+            const userRef = doc(db, "users", currentUser.uid);
+            const docSnap = await getDoc(userRef);
+
+            if (docSnap.exists()) {
+                // LOAD CLOUD SAVE
+                const cloudData = docSnap.data() as GameState;
+                console.log("Cloud save found, loading...", cloudData);
+                
+                setGameState(prev => {
+                    // We merge with INITIAL_GAME_STATE to ensure any new fields added in updates are present
+                    const newState = {
+                        ...INITIAL_GAME_STATE,
+                        ...cloudData,
+                        user: userProfile, // Ensure the auth user object is fresh
+                    };
+                    // Run morning reset logic on the loaded cloud data
+                    return handleMorningResetLogic(newState);
+                });
+                showNotification(`Welcome back, ${userProfile.displayName}`, 'success');
+            } else {
+                // NEW USER / NO CLOUD SAVE
+                // We keep the current local state but attach the user to it, 
+                // which will trigger the Save useEffect to upload it.
+                setGameState(prev => ({ ...prev, user: userProfile }));
+                showNotification("Cloud Account Linked", 'success');
+            }
+        } catch (error) {
+            console.error("Sync Error:", error);
+            showNotification("Failed to sync with cloud", 'error');
+            // Fallback: Just set the user so they are logged in locally
+            setGameState(prev => ({ ...prev, user: userProfile }));
+        } finally {
+            setIsSyncing(false);
+        }
       } else {
         // User logged out
         setGameState(prev => ({ ...prev, user: undefined }));
@@ -84,45 +115,62 @@ const App: React.FC = () => {
 
   // 3. Save to LocalStorage (and Firestore if logged in)
   useEffect(() => {
+    // Local Save
     localStorage.setItem('devquest_state', JSON.stringify(gameState));
     
-    // Simple Firestore Sync (Debounced ideally, but direct for now)
-    if (gameState.user) {
-        // We aren't implementing full sync logic yet to avoid overwriting data 
-        // without conflict resolution, but the 'db' is ready in firebase.ts
-        // const userRef = doc(db, 'users', gameState.user.uid);
-        // setDoc(userRef, { ...gameState }, { merge: true });
-    }
+    // Cloud Save (Debounced)
+    const saveToCloud = async () => {
+        if (gameState.user) {
+            try {
+                // setIsSyncing(true); // Optional: might flicker too much
+                const userRef = doc(db, 'users', gameState.user.uid);
+                
+                // We sanitize strictly undefined values if necessary, but Firestore JS SDK handles mostly everything.
+                // We purposely save the whole state.
+                await setDoc(userRef, gameState, { merge: true });
+                // setIsSyncing(false); 
+            } catch (e) {
+                console.error("Cloud Auto-save failed", e);
+            }
+        }
+    };
+
+    // specific debounce for cloud to save writes
+    const timeoutId = setTimeout(saveToCloud, 2000); 
+
+    return () => clearTimeout(timeoutId);
   }, [gameState]);
 
   // --- Logic Helpers ---
 
-  const handleMorningReset = (loadedState: GameState) => {
+  // Refactored to be pure for reuse in Cloud Load
+  const handleMorningResetLogic = (state: GameState): GameState => {
     const now = new Date();
-    const lastReset = new Date(loadedState.lastResetTime);
+    const lastReset = new Date(state.lastResetTime);
     
     // Check if it's past 6 AM today and last reset was before 6 AM today
     const sixAMToday = new Date();
     sixAMToday.setHours(6, 0, 0, 0);
 
-    // If now is before 6AM, the "reset boundary" was yesterday's 6AM.
-    // If now is after 6AM, the boundary is today's 6AM.
     const resetBoundary = now.getHours() >= 6 ? sixAMToday : new Date(sixAMToday.getTime() - 86400000);
 
     if (lastReset.getTime() < resetBoundary.getTime()) {
-      // Trigger Reset
-      setGameState(prev => ({
-        ...prev, // Use passed state in real implementation, but here we merge with loaded
-        ...loadedState,
-        hp: loadedState.maxHP, // Heal up
+      return {
+        ...state,
+        hp: state.maxHP, // Heal up
         activeTaskId: null, // Reset active task
         lastResetTime: Date.now(),
-        // Optional: Archive completed tasks here, but for now we keep them until deleted
-      }));
-      showNotification("Morning Routine Initialized. Energy Restored.", 'info');
-    } else {
-      setGameState(loadedState);
+      };
     }
+    return state;
+  };
+
+  const handleMorningReset = (loadedState: GameState) => {
+     const newState = handleMorningResetLogic(loadedState);
+     if (newState.lastResetTime !== loadedState.lastResetTime) {
+         showNotification("Morning Routine Initialized. Energy Restored.", 'info');
+     }
+     setGameState(newState);
   };
 
   const checkLevelUp = (currentXP: number, currentLevel: number, currentMaxXP: number) => {
@@ -274,17 +322,15 @@ const App: React.FC = () => {
     setGameState(prev => ({ ...prev, devMode: !prev.devMode }));
   };
 
-  // We no longer need the manual handleLogin because firebase listener handles it
   const handleManualLoginPlaceholder = (user: User) => {
-     // This is just to satisfy the Prop type if we kept the old manual logic, 
-     // but in the new flow, the AuthModal calls Firebase directly.
-     console.log("Legacy login called");
+     // Placeholder
   };
 
   const handleLogout = async () => {
     try {
         await signOut(auth);
         showNotification("Logged out", 'info');
+        setGameState(INITIAL_GAME_STATE); // Clear state on logout to avoid data leaks
     } catch (error) {
         console.error("Logout failed", error);
     }
@@ -328,12 +374,29 @@ const App: React.FC = () => {
 
           {/* Right Controls */}
           <div className="flex items-center gap-3">
+            {/* Sync Status */}
+            {gameState.user && (
+                <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-slate-100/10 border border-white/5">
+                    {isSyncing ? (
+                        <>
+                            <RefreshCw size={12} className="animate-spin text-emerald-500" />
+                            <span className="text-[10px] font-mono opacity-70">SYNCING</span>
+                        </>
+                    ) : (
+                        <>
+                            <Cloud size={12} className="text-emerald-500" />
+                            <span className="text-[10px] font-mono opacity-70">SAVED</span>
+                        </>
+                    )}
+                </div>
+            )}
+
             {/* User Profile / Auth */}
             {gameState.user ? (
                <div className="flex items-center gap-2 mr-2">
                   <div className="text-right hidden sm:block">
                      <div className={`text-xs font-bold ${isDevMode ? 'text-emerald-400' : 'text-slate-700'}`}>{gameState.user.displayName}</div>
-                     <div className="text-[10px] opacity-60">Synced</div>
+                     <div className="text-[10px] opacity-60">Level {gameState.level}</div>
                   </div>
                   <button 
                     onClick={handleLogout}
