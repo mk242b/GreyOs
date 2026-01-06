@@ -107,6 +107,8 @@ const App: React.FC = () => {
                 setIsSyncing(false);
             } else {
                 console.log("No cloud data yet (or new user creating doc)");
+                // If the user exists but has no doc, we treat them as a new user with default state
+                // The doc will be created when they save something (profile or task)
                 setIsSyncing(false);
             }
         }, (error) => {
@@ -139,8 +141,6 @@ const App: React.FC = () => {
                 const userRef = doc(db, 'users', gameState.user.uid);
                 // We use setDoc with merge to ensure we don't overwrite if multiple devices connect,
                 // though strictly this is a "last write wins" simplified model.
-                // IMPORTANT: We don't want to overwrite the API key with an empty string if local state is stale for some reason,
-                // but since we pull from cloud on load, it should be fine.
                 await setDoc(userRef, gameState, { merge: true });
             } catch (e) {
                 console.error("Cloud Auto-save failed", e);
@@ -220,6 +220,7 @@ const App: React.FC = () => {
     
     const updatedUser = { ...gameState.user, ...updates };
 
+    // Optimistic Update
     setGameState(prev => ({
         ...prev,
         user: updatedUser
@@ -227,13 +228,18 @@ const App: React.FC = () => {
 
     try {
         const userRef = doc(db, 'users', updatedUser.uid);
-        await updateDoc(userRef, {
+        
+        // Critical Fix: Use setDoc with merge: true instead of updateDoc.
+        // updateDoc fails if the document doesn't exist (e.g. initial creation failed or data was cleared).
+        // setDoc with merge handles both creation and update robustly.
+        await setDoc(userRef, {
             user: updatedUser
-        });
+        }, { merge: true });
+
         showNotification("Profile & Settings Saved", 'success');
-    } catch (e) {
+    } catch (e: any) {
         console.error("Failed to update profile", e);
-        showNotification("Failed to save profile", 'error');
+        showNotification(`Failed to save profile: ${e.message}`, 'error');
     }
   };
 
