@@ -21,6 +21,20 @@ const SmartTaskInput: React.FC<Props> = ({ isDevMode, onAdd }) => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
 
+  // Safe API Key retrieval
+  const getApiKey = () => {
+    try {
+      // @ts-ignore
+      if (typeof process !== 'undefined' && process.env && process.env.API_KEY) {
+        // @ts-ignore
+        return process.env.API_KEY;
+      }
+    } catch (e) {
+      // Ignore
+    }
+    return '';
+  };
+
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!text.trim()) return;
@@ -35,7 +49,16 @@ const SmartTaskInput: React.FC<Props> = ({ isDevMode, onAdd }) => {
     // AI Mode: Analyze paragraph/list
     setIsAnalyzing(true);
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      const apiKey = getApiKey();
+      if (!apiKey) {
+        console.warn("No API Key found. Falling back to manual entry.");
+        onAdd([{ title: text, quadrant: QuadrantType.Q1 }]);
+        setIsAnalyzing(false);
+        setText('');
+        return;
+      }
+
+      const ai = new GoogleGenAI({ apiKey });
       const now = new Date().toLocaleString();
       
       const prompt = `
