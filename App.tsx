@@ -62,61 +62,68 @@ const App: React.FC = () => {
 
   // 2. Firebase Auth Listener & Cloud Sync
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+    // We do NOT use async here to prevent blocking the listener
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       if (currentUser) {
         setIsSyncing(true);
-        // User logged in
-        // We construct a basic user object, but we'll try to fetch extended data (apiKey) from Firestore next
+        
+        // 1. IMMEDIATE OPTIMISTIC UPDATE
+        // Construct basic profile from Auth result immediately so UI updates instantly
         let userProfile: User = {
           uid: currentUser.uid,
           displayName: currentUser.displayName || 'DevQuest User',
           email: currentUser.email || '',
           photoURL: currentUser.photoURL || undefined,
-          apiKey: '' // Default empty
+          apiKey: '' // Default empty, will fill from cloud if exists
         };
 
-        try {
-            // Check for Cloud Save
-            const userRef = doc(db, "users", currentUser.uid);
-            const docSnap = await getDoc(userRef);
+        // Set state immediately - solves the "1 minute delay" issue
+        setGameState(prev => ({
+            ...prev,
+            user: userProfile,
+            devMode: true
+        }));
 
-            if (docSnap.exists()) {
-                // LOAD CLOUD SAVE
-                const cloudData = docSnap.data() as GameState;
-                console.log("Cloud save found, loading...", cloudData);
-                
-                // If the cloud save has a user object, use it (it might have the API key and custom name)
-                if (cloudData.user) {
-                   userProfile = { ...userProfile, ...cloudData.user };
+        // 2. FETCH CLOUD DATA IN BACKGROUND
+        (async () => {
+            try {
+                // Check for Cloud Save
+                const userRef = doc(db, "users", currentUser.uid);
+                const docSnap = await getDoc(userRef);
+
+                if (docSnap.exists()) {
+                    // LOAD CLOUD SAVE
+                    const cloudData = docSnap.data() as GameState;
+                    console.log("Cloud save loaded in background");
+                    
+                    // If the cloud save has extended user data (api key, custom name), merge it
+                    if (cloudData.user) {
+                       userProfile = { ...userProfile, ...cloudData.user };
+                    }
+
+                    setGameState(prev => {
+                        // Merge logic
+                        const newState = {
+                            ...INITIAL_GAME_STATE,
+                            ...cloudData,
+                            user: userProfile, // Ensure Auth data (like fresh photo) stays priority if needed, or merge carefully
+                            devMode: true,
+                        };
+                        return handleMorningResetLogic(newState);
+                    });
+                    showNotification(`Synced: ${userProfile.displayName}`, 'success');
+                } else {
+                    // NEW USER
+                    showNotification("Account Linked", 'success');
                 }
-
-                setGameState(prev => {
-                    // We merge with INITIAL_GAME_STATE to ensure any new fields added in updates are present
-                    const newState = {
-                        ...INITIAL_GAME_STATE,
-                        ...cloudData,
-                        user: userProfile, // Ensure the auth user object is fresh
-                        devMode: true, // Force Dark Mode
-                    };
-                    // Run morning reset logic on the loaded cloud data
-                    return handleMorningResetLogic(newState);
-                });
-                showNotification(`Welcome back, ${userProfile.displayName}`, 'success');
-            } else {
-                // NEW USER / NO CLOUD SAVE
-                // We keep the current local state but attach the user to it, 
-                // which will trigger the Save useEffect to upload it.
-                setGameState(prev => ({ ...prev, user: userProfile, devMode: true }));
-                showNotification("Cloud Account Linked", 'success');
+            } catch (error) {
+                console.error("Sync Error:", error);
+                // We don't alert here because we already have the optimistic local state working
+            } finally {
+                setIsSyncing(false);
             }
-        } catch (error) {
-            console.error("Sync Error:", error);
-            showNotification("Failed to sync with cloud", 'error');
-            // Fallback: Just set the user so they are logged in locally
-            setGameState(prev => ({ ...prev, user: userProfile, devMode: true }));
-        } finally {
-            setIsSyncing(false);
-        }
+        })();
+        
       } else {
         // User logged out
         setGameState(prev => ({ ...prev, user: undefined, devMode: true }));
