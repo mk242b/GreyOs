@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { GoogleGenAI } from "@google/genai";
 import { QuadrantType } from '../types';
 import { QUADRANT_DATA } from '../constants';
-import { Sparkles, Send, Bot, ChevronDown, Loader2, Key } from 'lucide-react';
+import { Sparkles, Send, Bot, ChevronDown, Loader2, Key, Settings } from 'lucide-react';
 
 interface TaskInputData {
   title: string;
@@ -39,6 +39,7 @@ const SmartTaskInput: React.FC<Props> = ({ isDevMode, onAdd, apiKey, onSaveApiKe
     // AI Mode Check
     if (!apiKey) {
       console.warn("AI Mode enabled but no API Key found.");
+      setTempApiKey('');
       setShowKeyInput(true);
       return;
     }
@@ -81,7 +82,7 @@ const SmartTaskInput: React.FC<Props> = ({ isDevMode, onAdd, apiKey, onSaveApiKe
           config: { responseMimeType: 'application/json' }
       });
       
-      // Clean up response if it contains markdown code blocks (even with mimeType JSON this can happen in previews)
+      // Clean up response if it contains markdown code blocks
       let responseText = result.text || "{}";
       responseText = responseText.replace(/```json/g, '').replace(/```/g, '').trim();
 
@@ -90,7 +91,6 @@ const SmartTaskInput: React.FC<Props> = ({ isDevMode, onAdd, apiKey, onSaveApiKe
       const parsed = JSON.parse(responseText);
 
       if (parsed.tasks && Array.isArray(parsed.tasks)) {
-        // Validate and map to ensure types are correct
         const validTasks: TaskInputData[] = parsed.tasks.map((t: any) => ({
           title: t.title,
           quadrant: ['Q1', 'Q2', 'Q3', 'Q4'].includes(t.quadrant) ? t.quadrant : 'Q1'
@@ -99,25 +99,29 @@ const SmartTaskInput: React.FC<Props> = ({ isDevMode, onAdd, apiKey, onSaveApiKe
         if (validTasks.length > 0) {
             onAdd(validTasks);
         } else {
-            // Empty array returned
             onAdd([{ title: text, quadrant: QuadrantType.Q1 }]);
         }
       } else {
-        // Fallback if AI returns valid JSON but weird structure
         console.warn("Unexpected JSON structure:", parsed);
         onAdd([{ title: text, quadrant: QuadrantType.Q1 }]);
       }
     } catch (error: any) {
       console.error("AI Parsing failed detailed:", error);
       
-      let errorMsg = "AI failed to respond. Adding as normal task.";
-      if (error.message?.includes("403")) errorMsg += " (Invalid API Key)";
-      if (error.message?.includes("404")) errorMsg += " (Model Not Found)";
-      
-      alert(errorMsg);
-      onAdd([{ title: text, quadrant: QuadrantType.Q1 }]);
+      // Handle Specific API Key Errors to allow user to fix them
+      if (error.message?.includes("403") || error.message?.includes("API key not valid") || error.message?.includes("key")) {
+          alert("Invalid API Key detected. Please update it in the settings.");
+          setTempApiKey(apiKey); // Pre-fill with current (bad) key so they can edit
+          setShowKeyInput(true);
+      } else {
+          // General AI failure fallback
+          alert("AI didn't respond correctly. Adding as normal task.");
+          onAdd([{ title: text, quadrant: QuadrantType.Q1 }]);
+      }
     } finally {
       setIsAnalyzing(false);
+      // Only clear text if successful? No, usually clear to reset state.
+      // If error happened, we added as normal task anyway, so clear.
       setText('');
     }
   };
@@ -134,19 +138,19 @@ const SmartTaskInput: React.FC<Props> = ({ isDevMode, onAdd, apiKey, onSaveApiKe
   const placeholderColor = isDevMode ? 'placeholder-slate-500' : 'placeholder-slate-400';
 
   // API Key Input View
-  if (!apiKey && showKeyInput) {
+  if (showKeyInput) {
       return (
           <div className={`relative z-30 p-4 rounded-xl border-2 transition-all ${inputBg} shadow-lg mb-6 flex flex-col gap-3 animate-pop-in`}>
               <div className="flex items-center gap-2 text-emerald-500 font-bold uppercase tracking-wider text-xs">
-                  <Key size={14} /> Gemini API Required
+                  <Key size={14} /> Update Gemini API Key
               </div>
               <p className="text-xs text-slate-400">
-                  To use Smart Categorization, provide your Gemini API Key. It will be saved to your profile securely.
+                  A valid Google Gemini API Key is required for Smart Categorization.
               </p>
               <div className="flex gap-2">
                   <input 
                     type="password" 
-                    placeholder="Paste your API Key here..." 
+                    placeholder="Paste API Key..." 
                     className={`flex-1 bg-transparent border border-slate-700 rounded p-2 text-sm ${textColor}`}
                     value={tempApiKey}
                     onChange={(e) => setTempApiKey(e.target.value)}
@@ -198,6 +202,21 @@ const SmartTaskInput: React.FC<Props> = ({ isDevMode, onAdd, apiKey, onSaveApiKe
           disabled={isAnalyzing}
           className={`flex-1 bg-transparent border-none outline-none p-2 ${textColor} ${placeholderColor} font-medium`}
         />
+
+        {/* Settings / Manual Key Update (Only visible if AI enabled and not analyzing) */}
+        {!isAnalyzing && isAIEnabled && (
+            <button
+                type="button"
+                onClick={() => {
+                    setTempApiKey(apiKey || '');
+                    setShowKeyInput(true);
+                }}
+                className="p-2 text-slate-600 hover:text-emerald-500 transition-colors"
+                title="API Key Settings"
+            >
+                <Settings size={16} />
+            </button>
+        )}
 
         {/* Manual Selector (Only if AI is OFF) */}
         {!isAIEnabled && (
