@@ -1,14 +1,18 @@
-import React from 'react';
-import { Shield, Zap, Coins, ListChecks } from 'lucide-react';
-import { GameState } from '../types';
+import React, { useState } from 'react';
+import { Shield, Zap, Coins, ListChecks, Pencil, Check, X } from 'lucide-react';
+import { GameState, User } from '../types';
 
 interface Props {
   state: GameState;
   isDevMode: boolean;
   dailyProgressPercentage: number;
+  onUpdateUser: (user: Partial<User>) => void;
 }
 
-const CharacterSheet: React.FC<Props> = ({ state, isDevMode, dailyProgressPercentage }) => {
+const CharacterSheet: React.FC<Props> = ({ state, isDevMode, dailyProgressPercentage, onUpdateUser }) => {
+  const [isEditing, setIsEditing] = useState(false);
+  const [editName, setEditName] = useState(state.user?.displayName || 'Guest');
+  
   const xpPercentage = Math.min((state.currentXP / state.maxXP) * 100, 100);
   const hpPercentage = (state.hp / state.maxHP) * 100;
   
@@ -17,6 +21,13 @@ const CharacterSheet: React.FC<Props> = ({ state, isDevMode, dailyProgressPercen
     : 'bg-white border-gray-200 text-slate-800 shadow-sm';
 
   const barBg = isDevMode ? 'bg-slate-800' : 'bg-gray-200';
+
+  const handleSaveName = () => {
+      if(editName.trim()) {
+          onUpdateUser({ displayName: editName });
+      }
+      setIsEditing(false);
+  };
 
   return (
     <div className={`p-4 rounded-xl border ${containerClass} transition-colors duration-300`}>
@@ -31,10 +42,33 @@ const CharacterSheet: React.FC<Props> = ({ state, isDevMode, dailyProgressPercen
                 LVL
                 </div>
             </div>
+            
+            {/* Name / Edit Section */}
             <div>
-                <h2 className={`text-xl font-bold ${isDevMode ? 'font-mono' : 'font-sans'}`}>
-                GREY
-                </h2>
+                {isEditing ? (
+                    <div className="flex items-center gap-2">
+                        <input 
+                            value={editName}
+                            onChange={(e) => setEditName(e.target.value)}
+                            className={`bg-transparent border-b ${isDevMode ? 'border-emerald-500 text-white' : 'border-blue-500 text-black'} focus:outline-none w-32`}
+                            autoFocus
+                        />
+                        <button onClick={handleSaveName} className="text-emerald-500 hover:text-emerald-400"><Check size={16} /></button>
+                        <button onClick={() => setIsEditing(false)} className="text-red-500 hover:text-red-400"><X size={16} /></button>
+                    </div>
+                ) : (
+                    <h2 className={`text-xl font-bold flex items-center gap-2 group ${isDevMode ? 'font-mono' : 'font-sans'}`}>
+                        {state.user ? state.user.displayName : 'GUEST'}
+                        {state.user && (
+                            <button 
+                                onClick={() => { setEditName(state.user!.displayName); setIsEditing(true); }}
+                                className="opacity-0 group-hover:opacity-100 transition-opacity text-slate-500 hover:text-emerald-500"
+                            >
+                                <Pencil size={12} />
+                            </button>
+                        )}
+                    </h2>
+                )}
                 <div className="text-xs opacity-70">
                 {isDevMode ? 'PRODUCTIVITY MODE' : 'CASUAL MODE'}
                 </div>

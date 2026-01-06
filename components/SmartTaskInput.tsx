@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { GoogleGenAI } from "@google/genai";
 import { QuadrantType } from '../types';
 import { QUADRANT_DATA } from '../constants';
-import { Sparkles, Send, Bot, ChevronDown, Loader2 } from 'lucide-react';
+import { Sparkles, Send, Bot, ChevronDown, Loader2, Key } from 'lucide-react';
 
 interface TaskInputData {
   title: string;
@@ -12,24 +12,18 @@ interface TaskInputData {
 interface Props {
   isDevMode: boolean;
   onAdd: (tasks: TaskInputData[]) => void;
+  apiKey: string;
+  onSaveApiKey: (key: string) => void;
 }
 
-const SmartTaskInput: React.FC<Props> = ({ isDevMode, onAdd }) => {
+const SmartTaskInput: React.FC<Props> = ({ isDevMode, onAdd, apiKey, onSaveApiKey }) => {
   const [text, setText] = useState('');
   const [isAIEnabled, setIsAIEnabled] = useState(true);
   const [selectedQuadrant, setSelectedQuadrant] = useState<QuadrantType>(QuadrantType.Q1);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
-
-  // Safe API Key retrieval
-  const getApiKey = () => {
-    try {
-      // Direct access in a try-catch to handle environments where process is undefined
-      return process.env.API_KEY;
-    } catch (e) {
-      return '';
-    }
-  };
+  const [tempApiKey, setTempApiKey] = useState('');
+  const [showKeyInput, setShowKeyInput] = useState(false);
 
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -42,19 +36,14 @@ const SmartTaskInput: React.FC<Props> = ({ isDevMode, onAdd }) => {
       return;
     }
 
-    // AI Mode: Analyze paragraph/list
-    setIsAnalyzing(true);
-    
-    const apiKey = getApiKey();
-    
-    // Safety check: If no API key, fallback immediately to avoid crashes
+    // AI Mode Check
     if (!apiKey) {
-      console.warn("No API Key found. Falling back to manual entry.");
-      onAdd([{ title: text, quadrant: QuadrantType.Q1 }]);
-      setIsAnalyzing(false);
-      setText('');
+      setShowKeyInput(true);
       return;
     }
+
+    // AI Mode: Analyze paragraph/list
+    setIsAnalyzing(true);
 
     try {
       const ai = new GoogleGenAI({ apiKey });
@@ -62,11 +51,11 @@ const SmartTaskInput: React.FC<Props> = ({ isDevMode, onAdd }) => {
       
       const prompt = `
       You are an elite productivity assistant.
-      The user has provided a raw stream of tasks (paragraph, list, or single sentence).
+      The user has provided a raw stream of tasks.
       Your goal is to parse this into distinct actionable tasks and classify them into the Eisenhower Matrix.
 
-      Context: The current time is ${now}. Use this to determine urgency (e.g., "submit by tonight" is Q1).
-
+      Context: The current time is ${now}.
+      
       Definitions:
       - Q1 (Urgent & Important): Crises, Deadlines for today/tomorrow.
       - Q2 (Not Urgent & Important): Planning, Skill building, Long-term projects.
@@ -109,6 +98,7 @@ const SmartTaskInput: React.FC<Props> = ({ isDevMode, onAdd }) => {
     } catch (error) {
       console.error("AI Parsing failed", error);
       // Fallback: add as single Q1 task if parsing fails
+      alert("AI failed to respond. Adding as normal task. Check your API Key.");
       onAdd([{ title: text, quadrant: QuadrantType.Q1 }]);
     } finally {
       setIsAnalyzing(false);
@@ -116,9 +106,51 @@ const SmartTaskInput: React.FC<Props> = ({ isDevMode, onAdd }) => {
     }
   };
 
+  const handleSaveKey = () => {
+      if(tempApiKey.trim()) {
+          onSaveApiKey(tempApiKey.trim());
+          setShowKeyInput(false);
+      }
+  };
+
   const inputBg = isDevMode ? 'bg-slate-900 border-emerald-500/50' : 'bg-white border-blue-200';
   const textColor = isDevMode ? 'text-white' : 'text-slate-800';
   const placeholderColor = isDevMode ? 'placeholder-slate-500' : 'placeholder-slate-400';
+
+  // API Key Input View
+  if (!apiKey && showKeyInput) {
+      return (
+          <div className={`relative z-30 p-4 rounded-xl border-2 transition-all ${inputBg} shadow-lg mb-6 flex flex-col gap-3 animate-pop-in`}>
+              <div className="flex items-center gap-2 text-emerald-500 font-bold uppercase tracking-wider text-xs">
+                  <Key size={14} /> Gemini API Required
+              </div>
+              <p className="text-xs text-slate-400">
+                  To use Smart Categorization, provide your Gemini API Key. It will be saved to your profile securely.
+              </p>
+              <div className="flex gap-2">
+                  <input 
+                    type="password" 
+                    placeholder="Paste your API Key here..." 
+                    className={`flex-1 bg-transparent border border-slate-700 rounded p-2 text-sm ${textColor}`}
+                    value={tempApiKey}
+                    onChange={(e) => setTempApiKey(e.target.value)}
+                  />
+                  <button 
+                    onClick={handleSaveKey}
+                    className="bg-emerald-600 text-white px-4 py-2 rounded text-sm font-bold hover:bg-emerald-500"
+                  >
+                    Save
+                  </button>
+                  <button 
+                    onClick={() => setShowKeyInput(false)}
+                    className="text-slate-500 px-3 py-2 text-sm hover:text-white"
+                  >
+                    Cancel
+                  </button>
+              </div>
+          </div>
+      );
+  }
 
   return (
     <div className={`relative z-30 p-1 rounded-xl border-2 transition-all ${inputBg} shadow-lg mb-6`}>
@@ -127,13 +159,16 @@ const SmartTaskInput: React.FC<Props> = ({ isDevMode, onAdd }) => {
         {/* Magic / AI Toggle */}
         <button
           type="button"
-          onClick={() => setIsAIEnabled(!isAIEnabled)}
+          onClick={() => {
+              if(!apiKey) setShowKeyInput(true);
+              else setIsAIEnabled(!isAIEnabled);
+          }}
           className={`p-3 rounded-lg transition-all flex-shrink-0 ${
             isAIEnabled 
               ? isDevMode ? 'bg-emerald-500/20 text-emerald-400' : 'bg-blue-100 text-blue-600'
               : 'text-slate-400 hover:text-slate-500'
           }`}
-          title={isAIEnabled ? "AI Auto-Sort: ON" : "AI Auto-Sort: OFF"}
+          title={!apiKey ? "Setup AI Key" : (isAIEnabled ? "AI Auto-Sort: ON" : "AI Auto-Sort: OFF")}
         >
           {isAnalyzing ? <Loader2 size={20} className="animate-spin" /> : <Sparkles size={20} />}
         </button>
@@ -143,7 +178,7 @@ const SmartTaskInput: React.FC<Props> = ({ isDevMode, onAdd }) => {
           type="text"
           value={text}
           onChange={(e) => setText(e.target.value)}
-          placeholder={isAnalyzing ? "AI is organizing your life..." : (isAIEnabled ? "Paste a list or describe your tasks..." : "What needs to be done?")}
+          placeholder={isAnalyzing ? "AI is organizing your life..." : (isAIEnabled ? "Describe tasks naturally..." : "What needs to be done?")}
           disabled={isAnalyzing}
           className={`flex-1 bg-transparent border-none outline-none p-2 ${textColor} ${placeholderColor} font-medium`}
         />

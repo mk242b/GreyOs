@@ -27,6 +27,7 @@ export interface User {
   displayName: string;
   photoURL?: string;
   email: string;
+  apiKey?: string; // Added to store Gemini API Key
 }
 
 export interface GameState {

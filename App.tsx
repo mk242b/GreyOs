@@ -22,7 +22,7 @@ import AuthModal from './components/AuthModal';
 import { Settings, Plus, X as CloseIcon, Terminal, GraduationCap, Monitor, LayoutDashboard, Play, User as UserIcon, LogOut, Cloud, RefreshCw } from 'lucide-react';
 import { auth, db } from './firebase'; // Import Firebase
 import { onAuthStateChanged, signOut } from 'firebase/auth';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
 
 const App: React.FC = () => {
   // --- State ---
@@ -66,11 +66,13 @@ const App: React.FC = () => {
       if (currentUser) {
         setIsSyncing(true);
         // User logged in
-        const userProfile: User = {
+        // We construct a basic user object, but we'll try to fetch extended data (apiKey) from Firestore next
+        let userProfile: User = {
           uid: currentUser.uid,
           displayName: currentUser.displayName || 'DevQuest User',
           email: currentUser.email || '',
-          photoURL: currentUser.photoURL || undefined
+          photoURL: currentUser.photoURL || undefined,
+          apiKey: '' // Default empty
         };
 
         try {
@@ -83,6 +85,11 @@ const App: React.FC = () => {
                 const cloudData = docSnap.data() as GameState;
                 console.log("Cloud save found, loading...", cloudData);
                 
+                // If the cloud save has a user object, use it (it might have the API key and custom name)
+                if (cloudData.user) {
+                   userProfile = { ...userProfile, ...cloudData.user };
+                }
+
                 setGameState(prev => {
                     // We merge with INITIAL_GAME_STATE to ensure any new fields added in updates are present
                     const newState = {
@@ -212,6 +219,31 @@ const App: React.FC = () => {
   const activeTask = gameState.tasks.find(t => t.id === gameState.activeTaskId);
 
   // --- Actions ---
+
+  const handleUpdateUserProfile = async (updates: Partial<User>) => {
+    if (!gameState.user) return;
+    
+    const updatedUser = { ...gameState.user, ...updates };
+
+    // 1. Update Local State
+    setGameState(prev => ({
+        ...prev,
+        user: updatedUser
+    }));
+
+    // 2. Update Firestore immediately (outside the debounced loop for critical user data)
+    try {
+        const userRef = doc(db, 'users', updatedUser.uid);
+        // We update the whole 'user' field in the GameState document
+        await updateDoc(userRef, {
+            user: updatedUser
+        });
+        showNotification("Profile Updated", 'success');
+    } catch (e) {
+        console.error("Failed to update profile", e);
+        showNotification("Failed to save profile", 'error');
+    }
+  };
 
   const handleAddTasks = (newTasksInput: { title: string, quadrant: QuadrantType }[]) => {
     const timestamp = Date.now();
@@ -422,9 +454,6 @@ const App: React.FC = () => {
                   <span className="hidden sm:inline">LOGIN</span>
                 </button>
             )}
-
-            {/* Theme Toggle (REMOVED) */}
-            {/* Dark Mode is now enforced */}
           </div>
         </div>
       </header>
@@ -438,6 +467,7 @@ const App: React.FC = () => {
             state={gameState} 
             isDevMode={isDevMode} 
             dailyProgressPercentage={dailyProgressPercentage}
+            onUpdateUser={handleUpdateUserProfile}
           />
         </section>
 
@@ -456,7 +486,13 @@ const App: React.FC = () => {
           
           {/* Main Task Matrix - Directly below active task */}
           <section className="flex-1 w-full lg:w-2/3">
-             <SmartTaskInput isDevMode={isDevMode} onAdd={handleAddTasks} />
+             {/* Pass API Key to Smart Input */}
+             <SmartTaskInput 
+                isDevMode={isDevMode} 
+                onAdd={handleAddTasks} 
+                apiKey={gameState.user?.apiKey || ''}
+                onSaveApiKey={(key) => handleUpdateUserProfile({ apiKey: key })}
+             />
              
              <TaskMatrix 
                 tasks={gameState.tasks}
