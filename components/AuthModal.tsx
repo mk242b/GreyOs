@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, ShieldCheck, User as UserIcon, Mail, Lock, Loader2, ArrowRight } from 'lucide-react';
+import { X, ShieldCheck, User as UserIcon, Mail, Lock, Loader2, ArrowRight, Key } from 'lucide-react';
 import { User } from '../types';
 import { auth, db } from '../firebase';
 import { createUserWithEmailAndPassword, signInWithEmailAndPassword, updateProfile } from 'firebase/auth';
@@ -17,6 +17,7 @@ const AuthModal: React.FC<Props> = ({ isOpen, onClose, onLogin }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [username, setUsername] = useState('');
+  const [apiKey, setApiKey] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -31,6 +32,7 @@ const AuthModal: React.FC<Props> = ({ isOpen, onClose, onLogin }) => {
       if (isSignUp) {
         // --- SIGN UP FLOW ---
         if (!username.trim()) throw new Error("Username is required");
+        if (!apiKey.trim()) throw new Error("Gemini API Key is required for System Access");
         
         // 1. Create Auth User
         const userCredential = await createUserWithEmailAndPassword(auth, email, password);
@@ -39,13 +41,12 @@ const AuthModal: React.FC<Props> = ({ isOpen, onClose, onLogin }) => {
         // 2. Update Display Name
         await updateProfile(firebaseUser, { displayName: username });
 
-        // 3. Create Initial Database Document
-        // We initialize the user's DB entry with default game state + their info
+        // 3. Create Initial Database Document with API KEY
         const initialUserData: User = {
             uid: firebaseUser.uid,
             displayName: username,
             email: firebaseUser.email || '',
-            apiKey: '' // Empty initially
+            apiKey: apiKey.trim() // SAVE API KEY
         };
 
         const initialDbState = {
@@ -56,7 +57,7 @@ const AuthModal: React.FC<Props> = ({ isOpen, onClose, onLogin }) => {
 
         await setDoc(doc(db, "users", firebaseUser.uid), initialDbState);
         
-        console.log("User created and DB initialized");
+        console.log("User created and DB initialized with API Key");
 
       } else {
         // --- LOGIN FLOW ---
@@ -147,6 +148,28 @@ const AuthModal: React.FC<Props> = ({ isOpen, onClose, onLogin }) => {
                 />
               </div>
             </div>
+
+            {/* API Key (Sign Up Only) */}
+            {isSignUp && (
+              <div className="space-y-1">
+                <label className="text-xs text-slate-400 font-mono uppercase flex justify-between">
+                  <span>Gemini API Key</span>
+                  <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="text-emerald-500 hover:underline text-[10px]">Get Key</a>
+                </label>
+                <div className="relative">
+                  <Key size={16} className="absolute left-3 top-3 text-emerald-500" />
+                  <input 
+                    type="password" 
+                    value={apiKey}
+                    onChange={(e) => setApiKey(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg py-2.5 pl-10 pr-4 text-white focus:border-emerald-500 focus:outline-none transition-colors placeholder-emerald-900/50"
+                    placeholder="AIzaSy..."
+                    required
+                  />
+                </div>
+                <p className="text-[10px] text-slate-500">Required for AI Task Analysis. Stored securely.</p>
+              </div>
+            )}
 
             {/* Error Message */}
             {errorMsg && (
