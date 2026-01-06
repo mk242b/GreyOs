@@ -21,21 +21,29 @@ const AuthModal: React.FC<Props> = ({ isOpen, onClose, onLogin }) => {
     setErrorMsg(null);
     
     try {
+      console.log("Starting Google Sign In...");
       const result = await signInWithPopup(auth, googleProvider);
+      console.log("Sign In Success:", result.user.uid);
       // The observer in App.tsx will handle the state update, 
       // but we can close the modal here.
       onClose();
     } catch (error: any) {
-      console.error("Login failed", error);
+      console.error("Login failed full error:", error);
+      console.error("Error Code:", error.code);
+      console.error("Error Message:", error.message);
       
       // Handle specific Firebase errors
       if (error.code === 'auth/unauthorized-domain') {
         const currentDomain = window.location.hostname;
-        setErrorMsg(`Domain not authorized (${currentDomain}). Please add this domain to your Firebase Console > Authentication > Settings > Authorized Domains.`);
+        setErrorMsg(`DOMAIN ERROR: "${currentDomain}" is not authorized. Go to Firebase Console -> Authentication -> Settings -> Authorized Domains and add it.`);
       } else if (error.code === 'auth/popup-closed-by-user') {
-        setErrorMsg("Sign-in cancelled.");
+        setErrorMsg("Sign-in cancelled by user.");
+      } else if (error.code === 'auth/popup-blocked') {
+        setErrorMsg("Popup blocked by browser. Please allow popups for this site.");
+      } else if (error.code === 'auth/cancelled-popup-request') {
+        setErrorMsg("Only one popup can be open at a time.");
       } else {
-        setErrorMsg(error.message || "Failed to sign in. Please try again.");
+        setErrorMsg(error.message || "Failed to sign in. Check console for details.");
       }
     } finally {
       setIsLoading(false);
@@ -71,7 +79,7 @@ const AuthModal: React.FC<Props> = ({ isOpen, onClose, onLogin }) => {
 
           <div className="space-y-3">
             {errorMsg && (
-              <div className="p-3 bg-red-500/20 border border-red-500/50 rounded text-red-200 text-xs text-center break-words">
+              <div className="p-3 bg-red-500/20 border border-red-500/50 rounded text-red-200 text-xs text-center break-words font-mono">
                 {errorMsg}
               </div>
             )}
