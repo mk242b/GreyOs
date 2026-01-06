@@ -48,16 +48,19 @@ const SmartTaskInput: React.FC<Props> = ({ isDevMode, onAdd }) => {
 
     // AI Mode: Analyze paragraph/list
     setIsAnalyzing(true);
-    try {
-      const apiKey = getApiKey();
-      if (!apiKey) {
-        console.warn("No API Key found. Falling back to manual entry.");
-        onAdd([{ title: text, quadrant: QuadrantType.Q1 }]);
-        setIsAnalyzing(false);
-        setText('');
-        return;
-      }
+    
+    const apiKey = getApiKey();
+    
+    // Safety check: If no API key, fallback immediately to avoid crashes
+    if (!apiKey) {
+      console.warn("No API Key found. Falling back to manual entry.");
+      onAdd([{ title: text, quadrant: QuadrantType.Q1 }]);
+      setIsAnalyzing(false);
+      setText('');
+      return;
+    }
 
+    try {
       const ai = new GoogleGenAI({ apiKey });
       const now = new Date().toLocaleString();
       
@@ -103,6 +106,9 @@ const SmartTaskInput: React.FC<Props> = ({ isDevMode, onAdd }) => {
         if (validTasks.length > 0) {
             onAdd(validTasks);
         }
+      } else {
+        // Fallback if AI returns valid JSON but weird structure
+        onAdd([{ title: text, quadrant: QuadrantType.Q1 }]);
       }
     } catch (error) {
       console.error("AI Parsing failed", error);
