@@ -94,7 +94,7 @@ const App: React.FC = () => {
                 if (docSnap.exists()) {
                     // LOAD CLOUD SAVE
                     const cloudData = docSnap.data() as GameState;
-                    console.log("Cloud save loaded in background");
+                    console.log("Cloud save loaded:", cloudData);
                     
                     // If the cloud save has extended user data (api key, custom name), merge it
                     if (cloudData.user) {
@@ -102,23 +102,22 @@ const App: React.FC = () => {
                     }
 
                     setGameState(prev => {
-                        // Merge logic
+                        // Merge logic: Cloud data wins for tasks/stats, but Auth wins for basic credentials if needed
                         const newState = {
                             ...INITIAL_GAME_STATE,
-                            ...cloudData,
-                            user: userProfile, // Ensure Auth data (like fresh photo) stays priority if needed, or merge carefully
+                            ...cloudData, // Overwrite local with cloud
+                            user: userProfile, 
                             devMode: true,
                         };
                         return handleMorningResetLogic(newState);
                     });
-                    showNotification(`Synced: ${userProfile.displayName}`, 'success');
+                    showNotification(`System Loaded: ${userProfile.displayName}`, 'success');
                 } else {
-                    // NEW USER
-                    showNotification("Account Linked", 'success');
+                    // NEW USER or No Data yet
+                    console.log("New user detected, no remote data yet.");
                 }
             } catch (error) {
                 console.error("Sync Error:", error);
-                // We don't alert here because we already have the optimistic local state working
             } finally {
                 setIsSyncing(false);
             }
@@ -145,17 +144,18 @@ const App: React.FC = () => {
                 // setIsSyncing(true); // Optional: might flicker too much
                 const userRef = doc(db, 'users', gameState.user.uid);
                 
-                // We sanitize strictly undefined values if necessary, but Firestore JS SDK handles mostly everything.
-                // We purposely save the whole state.
+                // CRITICAL: We save the entire game state. 
+                // This includes `gameState.user.apiKey` and `gameState.tasks`.
+                // Firestore setDoc with merge:true will update fields.
                 await setDoc(userRef, gameState, { merge: true });
-                // setIsSyncing(false); 
+                // console.log("Saved to cloud");
             } catch (e) {
                 console.error("Cloud Auto-save failed", e);
             }
         }
     };
 
-    // specific debounce for cloud to save writes
+    // specific debounce for cloud to save writes (2 seconds)
     const timeoutId = setTimeout(saveToCloud, 2000); 
 
     return () => clearTimeout(timeoutId);
@@ -230,22 +230,23 @@ const App: React.FC = () => {
   const handleUpdateUserProfile = async (updates: Partial<User>) => {
     if (!gameState.user) return;
     
+    // Create the new user object
     const updatedUser = { ...gameState.user, ...updates };
 
-    // 1. Update Local State
+    // 1. Update Local State (Triggers the useEffect save)
     setGameState(prev => ({
         ...prev,
         user: updatedUser
     }));
 
-    // 2. Update Firestore immediately (outside the debounced loop for critical user data)
+    // 2. Explicitly update Firestore immediately for critical changes (like API Key)
+    // The useEffect will also catch this, but this ensures immediate feedback for the user action.
     try {
         const userRef = doc(db, 'users', updatedUser.uid);
-        // We update the whole 'user' field in the GameState document
         await updateDoc(userRef, {
             user: updatedUser
         });
-        showNotification("Profile Updated", 'success');
+        showNotification("Profile & Settings Saved", 'success');
     } catch (e) {
         console.error("Failed to update profile", e);
         showNotification("Failed to save profile", 'error');
@@ -364,7 +365,8 @@ const App: React.FC = () => {
   };
 
   const handleManualLoginPlaceholder = (user: User) => {
-     // Placeholder
+     // This is handled by the AuthModal logic now, but passed to ensure type safety
+     // Since AuthModal handles the actual firebase logic, this is just a callback if needed
   };
 
   const handleLogout = async () => {

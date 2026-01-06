@@ -1,8 +1,10 @@
 import React, { useState } from 'react';
-import { X, LogIn, Cloud, ShieldCheck } from 'lucide-react';
+import { X, ShieldCheck, User as UserIcon, Mail, Lock, Loader2, ArrowRight } from 'lucide-react';
 import { User } from '../types';
-import { auth, googleProvider } from '../firebase';
-import { signInWithPopup } from 'firebase/auth';
+import { auth, db } from '../firebase';
+import { createUserWithEmailAndPassword, signInWithEmailAndPassword, updateProfile } from 'firebase/auth';
+import { doc, setDoc } from 'firebase/firestore';
+import { INITIAL_GAME_STATE } from '../constants';
 
 interface Props {
   isOpen: boolean;
@@ -11,54 +13,81 @@ interface Props {
 }
 
 const AuthModal: React.FC<Props> = ({ isOpen, onClose, onLogin }) => {
+  const [isSignUp, setIsSignUp] = useState(false);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [username, setUsername] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
-  const handleGoogleLogin = async () => {
+  const handleAuth = async (e: React.FormEvent) => {
+    e.preventDefault();
     setIsLoading(true);
     setErrorMsg(null);
-    
+
     try {
-      console.log("Starting Google Sign In...");
-      const result = await signInWithPopup(auth, googleProvider);
-      console.log("Sign In Success:", result.user.uid);
-      // The observer in App.tsx will handle the state update, 
-      // but we can close the modal here.
-      onClose();
-    } catch (error: any) {
-      console.error("Login failed full error:", error);
-      console.error("Error Code:", error.code);
-      console.error("Error Message:", error.message);
-      
-      // Handle specific Firebase errors
-      if (error.code === 'auth/unauthorized-domain') {
-        const currentDomain = window.location.hostname;
-        setErrorMsg(`DOMAIN ERROR: "${currentDomain}" is not authorized. Go to Firebase Console -> Authentication -> Settings -> Authorized Domains and add it.`);
-      } else if (error.code === 'auth/popup-closed-by-user') {
-        setErrorMsg("Sign-in cancelled by user.");
-      } else if (error.code === 'auth/popup-blocked') {
-        setErrorMsg("Popup blocked by browser. Please allow popups for this site.");
-      } else if (error.code === 'auth/cancelled-popup-request') {
-        setErrorMsg("Only one popup can be open at a time.");
+      if (isSignUp) {
+        // --- SIGN UP FLOW ---
+        if (!username.trim()) throw new Error("Username is required");
+        
+        // 1. Create Auth User
+        const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+        const firebaseUser = userCredential.user;
+
+        // 2. Update Display Name
+        await updateProfile(firebaseUser, { displayName: username });
+
+        // 3. Create Initial Database Document
+        // We initialize the user's DB entry with default game state + their info
+        const initialUserData: User = {
+            uid: firebaseUser.uid,
+            displayName: username,
+            email: firebaseUser.email || '',
+            apiKey: '' // Empty initially
+        };
+
+        const initialDbState = {
+            ...INITIAL_GAME_STATE,
+            user: initialUserData,
+            lastResetTime: Date.now()
+        };
+
+        await setDoc(doc(db, "users", firebaseUser.uid), initialDbState);
+        
+        console.log("User created and DB initialized");
+
       } else {
-        setErrorMsg(error.message || "Failed to sign in. Check console for details.");
+        // --- LOGIN FLOW ---
+        await signInWithEmailAndPassword(auth, email, password);
+        console.log("User logged in");
       }
+      
+      onClose();
+
+    } catch (error: any) {
+      console.error("Auth Error:", error);
+      let msg = error.message;
+      if (error.code === 'auth/email-already-in-use') msg = "That email is already registered.";
+      if (error.code === 'auth/wrong-password') msg = "Incorrect password.";
+      if (error.code === 'auth/user-not-found') msg = "No account found with this email.";
+      if (error.code === 'auth/weak-password') msg = "Password must be at least 6 characters.";
+      setErrorMsg(msg);
     } finally {
       setIsLoading(false);
     }
   };
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-200">
       <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md overflow-hidden shadow-2xl animate-pop-in">
         
         {/* Header */}
         <div className="p-6 border-b border-slate-800 flex justify-between items-center bg-slate-950/50">
-          <h2 className="text-xl font-bold text-white flex items-center gap-2">
+          <h2 className="text-xl font-bold text-white flex items-center gap-2 font-mono">
             <ShieldCheck className="text-emerald-500" />
-            Identity Verification
+            {isSignUp ? 'INIT_NEW_USER' : 'SYSTEM_LOGIN'}
           </h2>
           <button onClick={onClose} className="text-slate-400 hover:text-white transition-colors">
             <X size={20} />
@@ -66,36 +95,94 @@ const AuthModal: React.FC<Props> = ({ isOpen, onClose, onLogin }) => {
         </div>
 
         {/* Body */}
-        <div className="p-6 space-y-6">
-          <div className="text-center space-y-2">
-            <div className="mx-auto w-16 h-16 rounded-full bg-slate-800 flex items-center justify-center mb-4">
-              <Cloud size={32} className="text-blue-400" />
-            </div>
-            <h3 className="text-lg font-bold text-slate-200">Sync with Cloud</h3>
-            <p className="text-sm text-slate-400">
-              Sign in to backup your tasks, XP, and gold across devices using Firebase.
-            </p>
-          </div>
+        <div className="p-6">
+          <form onSubmit={handleAuth} className="space-y-4">
+            
+            {/* Username (Sign Up Only) */}
+            {isSignUp && (
+              <div className="space-y-1">
+                <label className="text-xs text-slate-400 font-mono uppercase">Display Name</label>
+                <div className="relative">
+                  <UserIcon size={16} className="absolute left-3 top-3 text-slate-500" />
+                  <input 
+                    type="text" 
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg py-2.5 pl-10 pr-4 text-white focus:border-emerald-500 focus:outline-none transition-colors"
+                    placeholder="CyberNinja"
+                    required
+                  />
+                </div>
+              </div>
+            )}
 
-          <div className="space-y-3">
+            {/* Email */}
+            <div className="space-y-1">
+              <label className="text-xs text-slate-400 font-mono uppercase">Email Address</label>
+              <div className="relative">
+                <Mail size={16} className="absolute left-3 top-3 text-slate-500" />
+                <input 
+                  type="email" 
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-700 rounded-lg py-2.5 pl-10 pr-4 text-white focus:border-emerald-500 focus:outline-none transition-colors"
+                  placeholder="user@example.com"
+                  required
+                />
+              </div>
+            </div>
+
+            {/* Password */}
+            <div className="space-y-1">
+              <label className="text-xs text-slate-400 font-mono uppercase">Password</label>
+              <div className="relative">
+                <Lock size={16} className="absolute left-3 top-3 text-slate-500" />
+                <input 
+                  type="password" 
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-700 rounded-lg py-2.5 pl-10 pr-4 text-white focus:border-emerald-500 focus:outline-none transition-colors"
+                  placeholder="••••••••"
+                  required
+                />
+              </div>
+            </div>
+
+            {/* Error Message */}
             {errorMsg && (
-              <div className="p-3 bg-red-500/20 border border-red-500/50 rounded text-red-200 text-xs text-center break-words font-mono">
+              <div className="p-3 bg-red-500/10 border border-red-500/20 rounded text-red-400 text-xs font-mono">
                 {errorMsg}
               </div>
             )}
 
+            {/* Submit Button */}
             <button
-              onClick={handleGoogleLogin}
+              type="submit"
               disabled={isLoading}
-              className="w-full py-3 px-4 bg-white hover:bg-slate-100 text-slate-900 font-bold rounded-lg flex items-center justify-center gap-3 transition-all active:scale-95 disabled:opacity-50"
+              className="w-full py-3 px-4 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-lg flex items-center justify-center gap-2 transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed mt-4 shadow-[0_0_15px_rgba(16,185,129,0.2)]"
             >
               {isLoading ? (
-                <span className="animate-spin w-5 h-5 border-2 border-slate-900 border-t-transparent rounded-full"></span>
+                <Loader2 className="animate-spin" size={20} />
               ) : (
-                <img src="https://www.svgrepo.com/show/475656/google-color.svg" alt="Google" className="w-5 h-5" />
+                <>
+                  {isSignUp ? 'Initialize Profile' : 'Access System'}
+                  <ArrowRight size={18} />
+                </>
               )}
-              {isLoading ? 'Authenticating...' : 'Sign in with Google'}
             </button>
+          </form>
+
+          {/* Toggle Login/Signup */}
+          <div className="mt-6 text-center">
+            <p className="text-sm text-slate-400">
+              {isSignUp ? "Already have an identity?" : "First time user?"}
+              <button 
+                onClick={() => { setIsSignUp(!isSignUp); setErrorMsg(null); }}
+                className="ml-2 text-emerald-400 hover:text-emerald-300 font-bold underline decoration-emerald-500/30 underline-offset-4"
+              >
+                {isSignUp ? "Log In" : "Create Account"}
+              </button>
+            </p>
           </div>
         </div>
 

@@ -1,5 +1,5 @@
 import { initializeApp } from "firebase/app";
-import { getAuth, GoogleAuthProvider } from "firebase/auth";
+import { getAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 
 // --- PASTE YOUR FIREBASE CONFIG OBJECT HERE ---
@@ -18,7 +18,6 @@ const app = initializeApp(firebaseConfig);
 
 // Initialize Services
 export const auth = getAuth(app);
-export const googleProvider = new GoogleAuthProvider();
 export const db = getFirestore(app); // Ready for storing tasks later
 
 export default app;
