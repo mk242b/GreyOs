@@ -20,7 +20,7 @@ export const INITIAL_GAME_STATE: GameState = {
     { id: 'r3', title: 'Treat Yourself', cost: 30, icon: 'cookie' },
   ],
   lastResetTime: Date.now(),
-  devMode: true,
+  devMode: true, // Force Dark Mode
   activeTaskId: null,
 };
 

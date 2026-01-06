@@ -19,7 +19,7 @@ import SuccessOverlay from './components/SuccessOverlay';
 import SmartTaskInput from './components/SmartTaskInput';
 import LevelUpOverlay from './components/LevelUpOverlay';
 import AuthModal from './components/AuthModal';
-import { Settings, Plus, X as CloseIcon, Terminal, GraduationCap, Sun, Monitor, LayoutDashboard, Play, User as UserIcon, LogOut, Cloud, RefreshCw } from 'lucide-react';
+import { Settings, Plus, X as CloseIcon, Terminal, GraduationCap, Monitor, LayoutDashboard, Play, User as UserIcon, LogOut, Cloud, RefreshCw } from 'lucide-react';
 import { auth, db } from './firebase'; // Import Firebase
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
@@ -36,6 +36,9 @@ const App: React.FC = () => {
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false); // Visual loading state for cloud ops
 
+  // Force Dark Mode
+  const isDevMode = true;
+
   // --- Persistence & Morning Reset ---
   
   // 1. Load from LocalStorage first (for instant offline load)
@@ -44,13 +47,15 @@ const App: React.FC = () => {
     if (saved) {
       try {
         const parsed: GameState = JSON.parse(saved);
+        // Ensure devMode is true even in old saves
+        parsed.devMode = true; 
         handleMorningReset(parsed);
       } catch (e) {
         console.error("Failed to parse save data", e);
-        setGameState(INITIAL_GAME_STATE);
+        setGameState({ ...INITIAL_GAME_STATE, devMode: true });
       }
     } else {
-        setGameState(INITIAL_GAME_STATE);
+        setGameState({ ...INITIAL_GAME_STATE, devMode: true });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -84,6 +89,7 @@ const App: React.FC = () => {
                         ...INITIAL_GAME_STATE,
                         ...cloudData,
                         user: userProfile, // Ensure the auth user object is fresh
+                        devMode: true, // Force Dark Mode
                     };
                     // Run morning reset logic on the loaded cloud data
                     return handleMorningResetLogic(newState);
@@ -93,20 +99,20 @@ const App: React.FC = () => {
                 // NEW USER / NO CLOUD SAVE
                 // We keep the current local state but attach the user to it, 
                 // which will trigger the Save useEffect to upload it.
-                setGameState(prev => ({ ...prev, user: userProfile }));
+                setGameState(prev => ({ ...prev, user: userProfile, devMode: true }));
                 showNotification("Cloud Account Linked", 'success');
             }
         } catch (error) {
             console.error("Sync Error:", error);
             showNotification("Failed to sync with cloud", 'error');
             // Fallback: Just set the user so they are logged in locally
-            setGameState(prev => ({ ...prev, user: userProfile }));
+            setGameState(prev => ({ ...prev, user: userProfile, devMode: true }));
         } finally {
             setIsSyncing(false);
         }
       } else {
         // User logged out
-        setGameState(prev => ({ ...prev, user: undefined }));
+        setGameState(prev => ({ ...prev, user: undefined, devMode: true }));
       }
     });
 
@@ -318,10 +324,6 @@ const App: React.FC = () => {
     });
   };
 
-  const toggleDevMode = () => {
-    setGameState(prev => ({ ...prev, devMode: !prev.devMode }));
-  };
-
   const handleManualLoginPlaceholder = (user: User) => {
      // Placeholder
   };
@@ -330,16 +332,15 @@ const App: React.FC = () => {
     try {
         await signOut(auth);
         showNotification("Logged out", 'info');
-        setGameState(INITIAL_GAME_STATE); // Clear state on logout to avoid data leaks
+        setGameState({ ...INITIAL_GAME_STATE, devMode: true }); // Clear state on logout
     } catch (error) {
         console.error("Logout failed", error);
     }
   };
 
   // --- Render Props ---
-  const isDevMode = gameState.devMode;
-  const bgClass = isDevMode ? 'bg-cyber-dark' : 'bg-uni-bg';
-  const textClass = isDevMode ? 'text-slate-200' : 'text-slate-800';
+  const bgClass = 'bg-cyber-dark';
+  const textClass = 'text-slate-200';
 
   return (
     <div className={`min-h-screen ${bgClass} ${textClass} transition-colors duration-500 font-sans pb-24 md:pb-8`}>
@@ -361,13 +362,13 @@ const App: React.FC = () => {
       />
 
       {/* Top Navigation / Header */}
-      <header className={`p-4 border-b ${isDevMode ? 'border-cyber-border bg-slate-950/80' : 'border-uni-border bg-white/80'} backdrop-blur sticky top-0 z-20`}>
+      <header className={`p-4 border-b border-cyber-border bg-slate-950/80 backdrop-blur sticky top-0 z-20`}>
         <div className="max-w-7xl mx-auto flex justify-between items-center">
           
           {/* Logo */}
           <div className="flex items-center gap-2">
-            <LayoutDashboard className={isDevMode ? 'text-emerald-500' : 'text-slate-800'} />
-            <h1 className={`text-xl font-bold tracking-tight hidden md:block ${isDevMode ? 'font-mono' : 'font-sans'}`}>
+            <LayoutDashboard className='text-emerald-500' />
+            <h1 className={`text-xl font-bold tracking-tight hidden md:block font-mono`}>
               Grey's<span className="text-emerald-500">_OS</span>
             </h1>
           </div>
@@ -395,7 +396,7 @@ const App: React.FC = () => {
             {gameState.user ? (
                <div className="flex items-center gap-2 mr-2">
                   <div className="text-right hidden sm:block">
-                     <div className={`text-xs font-bold ${isDevMode ? 'text-emerald-400' : 'text-slate-700'}`}>{gameState.user.displayName}</div>
+                     <div className={`text-xs font-bold text-emerald-400`}>{gameState.user.displayName}</div>
                      <div className="text-[10px] opacity-60">Level {gameState.level}</div>
                   </div>
                   <button 
@@ -415,20 +416,15 @@ const App: React.FC = () => {
             ) : (
                 <button 
                   onClick={() => setIsAuthModalOpen(true)}
-                  className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-bold transition-all ${isDevMode ? 'bg-slate-800 text-slate-300 hover:bg-slate-700' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+                  className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-bold transition-all bg-slate-800 text-slate-300 hover:bg-slate-700`}
                 >
                   <UserIcon size={14} />
                   <span className="hidden sm:inline">LOGIN</span>
                 </button>
             )}
 
-            {/* Theme Toggle */}
-            <button 
-              onClick={toggleDevMode}
-              className={`p-2 rounded-full transition-all ${isDevMode ? 'bg-slate-800 text-yellow-400 hover:bg-slate-700' : 'bg-slate-200 text-slate-600 hover:bg-slate-300'}`}
-            >
-              {isDevMode ? <Monitor size={20} /> : <Sun size={20} />}
-            </button>
+            {/* Theme Toggle (REMOVED) */}
+            {/* Dark Mode is now enforced */}
           </div>
         </div>
       </header>
@@ -478,8 +474,8 @@ const App: React.FC = () => {
             <RewardShop state={gameState} isDevMode={isDevMode} onBuy={buyReward} />
             
             {/* Quick Tips / Lore */}
-            <div className={`p-4 rounded-xl border ${isDevMode ? 'border-cyber-border bg-slate-900/50' : 'border-uni-border bg-white'}`}>
-              <h3 className={`font-bold mb-2 ${isDevMode ? 'text-emerald-500 font-mono' : 'text-blue-600'}`}>DASHBOARD INFO</h3>
+            <div className={`p-4 rounded-xl border border-cyber-border bg-slate-900/50`}>
+              <h3 className={`font-bold mb-2 text-emerald-500 font-mono`}>DASHBOARD INFO</h3>
               <ul className="text-sm space-y-2 opacity-80 list-disc list-inside">
                 <li>System reset: 06:00 Daily</li>
                 <li>Press <Play size={10} className="inline"/> to focus on a task.</li>
@@ -498,7 +494,7 @@ const App: React.FC = () => {
             document.querySelector('input')?.focus();
             window.scrollTo({ top: 400, behavior: 'smooth' });
         }}
-        className={`fixed bottom-6 right-6 p-4 z-40 rounded-full shadow-lg hover:scale-110 transition-transform ${isDevMode ? 'bg-emerald-600 text-white shadow-emerald-500/20' : 'bg-blue-600 text-white shadow-blue-500/30'}`}
+        className={`fixed bottom-6 right-6 p-4 z-40 rounded-full shadow-lg hover:scale-110 transition-transform bg-emerald-600 text-white shadow-emerald-500/20`}
       >
         <Plus size={32} />
       </button>
