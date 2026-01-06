@@ -24,15 +24,11 @@ const SmartTaskInput: React.FC<Props> = ({ isDevMode, onAdd }) => {
   // Safe API Key retrieval
   const getApiKey = () => {
     try {
-      // @ts-ignore
-      if (typeof process !== 'undefined' && process.env && process.env.API_KEY) {
-        // @ts-ignore
-        return process.env.API_KEY;
-      }
+      // Direct access in a try-catch to handle environments where process is undefined
+      return process.env.API_KEY;
     } catch (e) {
-      // Ignore
+      return '';
     }
-    return '';
   };
 
   const handleAdd = async (e: React.FormEvent) => {
