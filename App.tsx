@@ -19,7 +19,7 @@ import SuccessOverlay from './components/SuccessOverlay';
 import SmartTaskInput from './components/SmartTaskInput';
 import LevelUpOverlay from './components/LevelUpOverlay';
 import AuthModal from './components/AuthModal';
-import { Settings, Plus, X as CloseIcon, Terminal, GraduationCap, Monitor, LayoutDashboard, Play, User as UserIcon, LogOut, Cloud, RefreshCw } from 'lucide-react';
+import { Settings, Plus, X as CloseIcon, Terminal, GraduationCap, Monitor, LayoutDashboard, Play, User as UserIcon, LogOut, Cloud, RefreshCw, Save } from 'lucide-react';
 import { auth, db } from './firebase'; // Import Firebase
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { doc, getDoc, setDoc, updateDoc, onSnapshot } from 'firebase/firestore';
@@ -243,6 +243,23 @@ const App: React.FC = () => {
     }
   };
 
+  const handleManualSave = async () => {
+    if (!gameState.user) return;
+    
+    setIsSyncing(true);
+    try {
+        const userRef = doc(db, 'users', gameState.user.uid);
+        await setDoc(userRef, gameState, { merge: true });
+        showNotification("Progress Saved", 'success');
+    } catch (e) {
+        console.error("Manual save failed", e);
+        showNotification("Save Failed", 'error');
+    } finally {
+        // Small delay to make sure user sees the spinner
+        setTimeout(() => setIsSyncing(false), 800);
+    }
+  };
+
   const handleAddTasks = (newTasksInput: { title: string, quadrant: QuadrantType }[]) => {
     const timestamp = Date.now();
     
@@ -396,18 +413,33 @@ const App: React.FC = () => {
 
           <div className="flex items-center gap-3">
             {gameState.user && (
-                <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-slate-100/10 border border-white/5">
-                    {isSyncing ? (
-                        <>
-                            <RefreshCw size={12} className="animate-spin text-emerald-500" />
-                            <span className="text-[10px] font-mono opacity-70">SYNCING</span>
-                        </>
-                    ) : (
-                        <>
-                            <Cloud size={12} className="text-emerald-500" />
-                            <span className="text-[10px] font-mono opacity-70">SAVED</span>
-                        </>
-                    )}
+                <div className="flex items-center gap-2">
+                    <button 
+                        onClick={handleManualSave}
+                        disabled={isSyncing}
+                        className={`p-2 rounded-lg border border-slate-700/50 transition-all ${
+                            isSyncing 
+                                ? 'bg-slate-800/50 text-slate-600' 
+                                : 'bg-slate-800 text-slate-400 hover:text-emerald-400 hover:border-emerald-500/30 shadow-lg'
+                        }`}
+                        title="Force Save to Cloud"
+                    >
+                        <Save size={14} />
+                    </button>
+
+                    <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-slate-100/10 border border-white/5">
+                        {isSyncing ? (
+                            <>
+                                <RefreshCw size={12} className="animate-spin text-emerald-500" />
+                                <span className="text-[10px] font-mono opacity-70">SYNCING</span>
+                            </>
+                        ) : (
+                            <>
+                                <Cloud size={12} className="text-emerald-500" />
+                                <span className="text-[10px] font-mono opacity-70">SAVED</span>
+                            </>
+                        )}
+                    </div>
                 </div>
             )}
 
