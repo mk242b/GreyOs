@@ -38,6 +38,7 @@ const SmartTaskInput: React.FC<Props> = ({ isDevMode, onAdd, apiKey, onSaveApiKe
 
     // AI Mode Check
     if (!apiKey) {
+      console.warn("AI Mode enabled but no API Key found.");
       setShowKeyInput(true);
       return;
     }
@@ -46,6 +47,7 @@ const SmartTaskInput: React.FC<Props> = ({ isDevMode, onAdd, apiKey, onSaveApiKe
     setIsAnalyzing(true);
 
     try {
+      console.log("Initializing Gemini with key length:", apiKey.length);
       const ai = new GoogleGenAI({ apiKey });
       const now = new Date().toLocaleString();
       
@@ -72,13 +74,19 @@ const SmartTaskInput: React.FC<Props> = ({ isDevMode, onAdd, apiKey, onSaveApiKe
       }
       `;
 
+      console.log("Sending request to gemini-3-flash-preview...");
       const result = await ai.models.generateContent({ 
           model: 'gemini-3-flash-preview', 
           contents: prompt,
           config: { responseMimeType: 'application/json' }
       });
       
-      const responseText = result.text || "{}";
+      // Clean up response if it contains markdown code blocks (even with mimeType JSON this can happen in previews)
+      let responseText = result.text || "{}";
+      responseText = responseText.replace(/```json/g, '').replace(/```/g, '').trim();
+
+      console.log("AI Response received:", responseText);
+
       const parsed = JSON.parse(responseText);
 
       if (parsed.tasks && Array.isArray(parsed.tasks)) {
@@ -90,15 +98,23 @@ const SmartTaskInput: React.FC<Props> = ({ isDevMode, onAdd, apiKey, onSaveApiKe
         
         if (validTasks.length > 0) {
             onAdd(validTasks);
+        } else {
+            // Empty array returned
+            onAdd([{ title: text, quadrant: QuadrantType.Q1 }]);
         }
       } else {
         // Fallback if AI returns valid JSON but weird structure
+        console.warn("Unexpected JSON structure:", parsed);
         onAdd([{ title: text, quadrant: QuadrantType.Q1 }]);
       }
-    } catch (error) {
-      console.error("AI Parsing failed", error);
-      // Fallback: add as single Q1 task if parsing fails
-      alert("AI failed to respond. Adding as normal task. Check your API Key.");
+    } catch (error: any) {
+      console.error("AI Parsing failed detailed:", error);
+      
+      let errorMsg = "AI failed to respond. Adding as normal task.";
+      if (error.message?.includes("403")) errorMsg += " (Invalid API Key)";
+      if (error.message?.includes("404")) errorMsg += " (Model Not Found)";
+      
+      alert(errorMsg);
       onAdd([{ title: text, quadrant: QuadrantType.Q1 }]);
     } finally {
       setIsAnalyzing(false);

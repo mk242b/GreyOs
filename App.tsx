@@ -22,7 +22,7 @@ import AuthModal from './components/AuthModal';
 import { Settings, Plus, X as CloseIcon, Terminal, GraduationCap, Monitor, LayoutDashboard, Play, User as UserIcon, LogOut, Cloud, RefreshCw } from 'lucide-react';
 import { auth, db } from './firebase'; // Import Firebase
 import { onAuthStateChanged, signOut } from 'firebase/auth';
-import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc, onSnapshot } from 'firebase/firestore';
 
 const App: React.FC = () => {
   // --- State ---
@@ -47,7 +47,6 @@ const App: React.FC = () => {
     if (saved) {
       try {
         const parsed: GameState = JSON.parse(saved);
-        // Ensure devMode is true even in old saves
         parsed.devMode = true; 
         handleMorningReset(parsed);
       } catch (e) {
@@ -60,115 +59,105 @@ const App: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 2. Firebase Auth Listener & Cloud Sync
+  // 2. Firebase Auth Listener & Cloud Sync (Real-time)
   useEffect(() => {
-    // We do NOT use async here to prevent blocking the listener
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+    let unsubscribeSnapshot: () => void;
+
+    const unsubscribeAuth = onAuthStateChanged(auth, (currentUser) => {
       if (currentUser) {
         setIsSyncing(true);
         
-        // 1. IMMEDIATE OPTIMISTIC UPDATE
-        // Construct basic profile from Auth result immediately so UI updates instantly
+        // Optimistic basic load
         let userProfile: User = {
           uid: currentUser.uid,
           displayName: currentUser.displayName || 'DevQuest User',
           email: currentUser.email || '',
           photoURL: currentUser.photoURL || undefined,
-          apiKey: '' // Default empty, will fill from cloud if exists
+          apiKey: '' 
         };
 
-        // Set state immediately - solves the "1 minute delay" issue
         setGameState(prev => ({
             ...prev,
             user: userProfile,
             devMode: true
         }));
 
-        // 2. FETCH CLOUD DATA IN BACKGROUND
-        (async () => {
-            try {
-                // Check for Cloud Save
-                const userRef = doc(db, "users", currentUser.uid);
-                const docSnap = await getDoc(userRef);
+        // Real-time listener for User Data
+        const userRef = doc(db, "users", currentUser.uid);
+        
+        unsubscribeSnapshot = onSnapshot(userRef, (docSnap) => {
+            if (docSnap.exists()) {
+                const cloudData = docSnap.data() as GameState;
+                console.log("Cloud update received");
 
-                if (docSnap.exists()) {
-                    // LOAD CLOUD SAVE
-                    const cloudData = docSnap.data() as GameState;
-                    console.log("Cloud save loaded:", cloudData);
-                    
-                    // If the cloud save has extended user data (api key, custom name), merge it
-                    if (cloudData.user) {
-                       userProfile = { ...userProfile, ...cloudData.user };
-                    }
-
-                    setGameState(prev => {
-                        // Merge logic: Cloud data wins for tasks/stats, but Auth wins for basic credentials if needed
-                        const newState = {
-                            ...INITIAL_GAME_STATE,
-                            ...cloudData, // Overwrite local with cloud
-                            user: userProfile, 
-                            devMode: true,
-                        };
-                        return handleMorningResetLogic(newState);
-                    });
-                    showNotification(`System Loaded: ${userProfile.displayName}`, 'success');
-                } else {
-                    // NEW USER or No Data yet
-                    console.log("New user detected, no remote data yet.");
+                // Merge Logic
+                if (cloudData.user) {
+                   userProfile = { ...userProfile, ...cloudData.user };
                 }
-            } catch (error) {
-                console.error("Sync Error:", error);
-            } finally {
+
+                setGameState(prev => {
+                    const newState = {
+                        ...INITIAL_GAME_STATE,
+                        ...cloudData, // Cloud is source of truth
+                        user: userProfile, 
+                        devMode: true,
+                    };
+                    return handleMorningResetLogic(newState);
+                });
+                setIsSyncing(false);
+            } else {
+                console.log("No cloud data yet (or new user creating doc)");
                 setIsSyncing(false);
             }
-        })();
+        }, (error) => {
+            console.error("Snapshot error:", error);
+            setIsSyncing(false);
+        });
         
       } else {
         // User logged out
+        if (unsubscribeSnapshot) unsubscribeSnapshot();
         setGameState(prev => ({ ...prev, user: undefined, devMode: true }));
+        setIsSyncing(false);
       }
     });
 
-    return () => unsubscribe();
+    return () => {
+        unsubscribeAuth();
+        if (unsubscribeSnapshot) unsubscribeSnapshot();
+    };
   }, []);
 
   // 3. Save to LocalStorage (and Firestore if logged in)
   useEffect(() => {
-    // Local Save
     localStorage.setItem('devquest_state', JSON.stringify(gameState));
     
     // Cloud Save (Debounced)
     const saveToCloud = async () => {
         if (gameState.user) {
             try {
-                // setIsSyncing(true); // Optional: might flicker too much
                 const userRef = doc(db, 'users', gameState.user.uid);
-                
-                // CRITICAL: We save the entire game state. 
-                // This includes `gameState.user.apiKey` and `gameState.tasks`.
-                // Firestore setDoc with merge:true will update fields.
+                // We use setDoc with merge to ensure we don't overwrite if multiple devices connect,
+                // though strictly this is a "last write wins" simplified model.
+                // IMPORTANT: We don't want to overwrite the API key with an empty string if local state is stale for some reason,
+                // but since we pull from cloud on load, it should be fine.
                 await setDoc(userRef, gameState, { merge: true });
-                // console.log("Saved to cloud");
             } catch (e) {
                 console.error("Cloud Auto-save failed", e);
             }
         }
     };
 
-    // specific debounce for cloud to save writes (2 seconds)
     const timeoutId = setTimeout(saveToCloud, 2000); 
-
     return () => clearTimeout(timeoutId);
   }, [gameState]);
 
   // --- Logic Helpers ---
 
-  // Refactored to be pure for reuse in Cloud Load
   const handleMorningResetLogic = (state: GameState): GameState => {
     const now = new Date();
     const lastReset = new Date(state.lastResetTime);
     
-    // Check if it's past 6 AM today and last reset was before 6 AM today
     const sixAMToday = new Date();
     sixAMToday.setHours(6, 0, 0, 0);
 
@@ -214,8 +203,7 @@ const App: React.FC = () => {
     setTimeout(() => setNotification(null), 3000);
   };
 
-  // --- Calculations for Daily XP Progress ---
-  // Calculate total XP potential for the day (completed + pending tasks)
+  // --- Calculations ---
   const calculateTaskXP = (task: Task) => BASE_XP * QUADRANT_DATA[task.quadrant].xpMultiplier;
   
   const dailyPotentialXP = gameState.tasks.reduce((acc, t) => acc + calculateTaskXP(t), 0);
@@ -230,17 +218,13 @@ const App: React.FC = () => {
   const handleUpdateUserProfile = async (updates: Partial<User>) => {
     if (!gameState.user) return;
     
-    // Create the new user object
     const updatedUser = { ...gameState.user, ...updates };
 
-    // 1. Update Local State (Triggers the useEffect save)
     setGameState(prev => ({
         ...prev,
         user: updatedUser
     }));
 
-    // 2. Explicitly update Firestore immediately for critical changes (like API Key)
-    // The useEffect will also catch this, but this ensures immediate feedback for the user action.
     try {
         const userRef = doc(db, 'users', updatedUser.uid);
         await updateDoc(userRef, {
@@ -256,7 +240,6 @@ const App: React.FC = () => {
   const handleAddTasks = (newTasksInput: { title: string, quadrant: QuadrantType }[]) => {
     const timestamp = Date.now();
     
-    // Create Task objects
     const newTasks: Task[] = newTasksInput.map((input, index) => ({
       id: `${timestamp}-${index}-${Math.random().toString(36).substr(2, 5)}`,
       title: input.title,
@@ -266,7 +249,6 @@ const App: React.FC = () => {
     }));
 
     setGameState(prev => {
-        // If there's no active task, automatically focus the first Q1 task added
         let nextActiveId = prev.activeTaskId;
         if (!nextActiveId) {
             const firstQ1 = newTasks.find(t => t.quadrant === QuadrantType.Q1);
@@ -288,11 +270,9 @@ const App: React.FC = () => {
   };
 
   const completeTask = (task: Task) => {
-    // 1. Calculate XP
     const multiplier = QUADRANT_DATA[task.quadrant].xpMultiplier;
     const gainedXP = Math.floor(BASE_XP * multiplier);
 
-    // 2. Trigger Dopamine Effects
     setShowConfetti(true);
     setSuccessOverlay({ xp: gainedXP });
     setTimeout(() => {
@@ -301,12 +281,10 @@ const App: React.FC = () => {
     }, 2000);
 
     setGameState(prev => {
-      // Update XP & Gold
       const rawXP = prev.currentXP + gainedXP;
       const { xp, level, maxXP, leveledUp } = checkLevelUp(rawXP, prev.level, prev.maxXP);
       
       if (leveledUp) {
-        // Trigger the Full Screen Level Up Overlay
         setLevelUpLevel(level);
       }
 
@@ -318,7 +296,7 @@ const App: React.FC = () => {
         currentXP: xp,
         level,
         maxXP,
-        gold: prev.gold + gainedXP, // 1:1 Gold ratio
+        gold: prev.gold + gainedXP, 
         tasks: updatedTasks,
         activeTaskId: isWasActive ? null : prev.activeTaskId
       };
@@ -359,21 +337,19 @@ const App: React.FC = () => {
       return {
         ...prev,
         gold: prev.gold - reward.cost,
-        hp: Math.min(prev.maxHP, prev.hp + 10) // Small heal on reward buy? Why not.
+        hp: Math.min(prev.maxHP, prev.hp + 10) 
       };
     });
   };
 
   const handleManualLoginPlaceholder = (user: User) => {
-     // This is handled by the AuthModal logic now, but passed to ensure type safety
-     // Since AuthModal handles the actual firebase logic, this is just a callback if needed
   };
 
   const handleLogout = async () => {
     try {
         await signOut(auth);
         showNotification("Logged out", 'info');
-        setGameState({ ...INITIAL_GAME_STATE, devMode: true }); // Clear state on logout
+        setGameState({ ...INITIAL_GAME_STATE, devMode: true }); 
     } catch (error) {
         console.error("Logout failed", error);
     }
@@ -386,7 +362,6 @@ const App: React.FC = () => {
   return (
     <div className={`min-h-screen ${bgClass} ${textClass} transition-colors duration-500 font-sans pb-24 md:pb-8`}>
       
-      {/* Visual Effects */}
       {showConfetti && <Confetti />}
       {successOverlay && <SuccessOverlay xpGained={successOverlay.xp} isDevMode={isDevMode} />}
       {levelUpLevel !== null && (
@@ -402,11 +377,10 @@ const App: React.FC = () => {
         onLogin={handleManualLoginPlaceholder}
       />
 
-      {/* Top Navigation / Header */}
+      {/* Header */}
       <header className={`p-4 border-b border-cyber-border bg-slate-950/80 backdrop-blur sticky top-0 z-20`}>
         <div className="max-w-7xl mx-auto flex justify-between items-center">
           
-          {/* Logo */}
           <div className="flex items-center gap-2">
             <LayoutDashboard className='text-emerald-500' />
             <h1 className={`text-xl font-bold tracking-tight hidden md:block font-mono`}>
@@ -414,9 +388,7 @@ const App: React.FC = () => {
             </h1>
           </div>
 
-          {/* Right Controls */}
           <div className="flex items-center gap-3">
-            {/* Sync Status */}
             {gameState.user && (
                 <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-slate-100/10 border border-white/5">
                     {isSyncing ? (
@@ -433,7 +405,6 @@ const App: React.FC = () => {
                 </div>
             )}
 
-            {/* User Profile / Auth */}
             {gameState.user ? (
                <div className="flex items-center gap-2 mr-2">
                   <div className="text-right hidden sm:block">
@@ -470,7 +441,6 @@ const App: React.FC = () => {
       {/* Main Content */}
       <main className="max-w-7xl mx-auto p-4 space-y-6">
         
-        {/* Character Sheet */}
         <section>
           <CharacterSheet 
             state={gameState} 
@@ -480,7 +450,6 @@ const App: React.FC = () => {
           />
         </section>
 
-        {/* Active Task / Plant Animation (Directly above Matrix) */}
         <section>
             <ActivePlant 
                 activeTask={activeTask} 
@@ -490,12 +459,9 @@ const App: React.FC = () => {
             />
         </section>
 
-        {/* Dashboard Grid - Matrix takes priority */}
         <div className="flex flex-col lg:flex-row gap-6 items-start">
           
-          {/* Main Task Matrix - Directly below active task */}
           <section className="flex-1 w-full lg:w-2/3">
-             {/* Pass API Key to Smart Input */}
              <SmartTaskInput 
                 isDevMode={isDevMode} 
                 onAdd={handleAddTasks} 
@@ -514,11 +480,9 @@ const App: React.FC = () => {
              />
           </section>
 
-          {/* Sidebar (Shop & Meta) */}
           <section className="w-full lg:w-1/3 space-y-6 sticky top-24">
             <RewardShop state={gameState} isDevMode={isDevMode} onBuy={buyReward} />
             
-            {/* Quick Tips / Lore */}
             <div className={`p-4 rounded-xl border border-cyber-border bg-slate-900/50`}>
               <h3 className={`font-bold mb-2 text-emerald-500 font-mono`}>DASHBOARD INFO</h3>
               <ul className="text-sm space-y-2 opacity-80 list-disc list-inside">
@@ -533,7 +497,6 @@ const App: React.FC = () => {
         </div>
       </main>
 
-      {/* Floating Action Button (Focus Input) */}
       <button
         onClick={() => {
             document.querySelector('input')?.focus();
@@ -544,7 +507,6 @@ const App: React.FC = () => {
         <Plus size={32} />
       </button>
 
-      {/* Standard Notifications (Small) */}
       {notification && (
         <div className={`fixed top-20 left-1/2 -translate-x-1/2 z-50 px-6 py-3 rounded-full shadow-xl flex items-center gap-3 animate-bounce whitespace-nowrap ${
           notification.type === 'level-up' 
